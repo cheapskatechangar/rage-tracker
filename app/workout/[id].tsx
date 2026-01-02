@@ -5,7 +5,7 @@
 // Dispatcher:
 // - id is template_id
 // - optional query param: ?sessionId=... to resume an unfinished session
-// - routes to the correct workout type screen
+// - uses template.workout_type (your data files), not template.type
 
 import { View, Text, Pressable } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
@@ -45,19 +45,21 @@ export default function WorkoutDispatcher() {
     );
   }
 
-  const type = String((template as any).type ?? "");
+  const wt = String((template as any).workout_type ?? "");
 
-  if (type === "fibonacci") return <FibonacciWorkout template={template} sessionId={sessionId} />;
-  if (type === "progressive_super_sets") return <ProgressiveSuperSetsWorkout template={template} sessionId={sessionId} />;
-  if (type === "timed_sets") return <TimedSetsWorkout template={template} sessionId={sessionId} />;
-  if (type === "conditioning_circuits") return <ConditioningCircuitsWorkout template={template} sessionId={sessionId} />;
+  if (wt === "fibonacci") return <FibonacciWorkout template={template} sessionId={sessionId} />;
+  if (wt === "progressive_super_sets") return <ProgressiveSuperSetsWorkout template={template} sessionId={sessionId} />;
+  if (wt === "timed_sets") return <TimedSetsWorkout template={template} sessionId={sessionId} />;
+  if (wt === "conditioning_circuits") return <ConditioningCircuitsWorkout template={template} sessionId={sessionId} />;
 
-  // Fallback inference (if template.type missing)
+  // Fallback inference (if workout_type missing)
   const hasCircuits = !!(template as any)?.day_plan?.circuits?.length;
+  const hasWaves = !!(template as any)?.day_plan?.waves?.length;
   const hasTimedItems = Array.isArray((template as any)?.items) && (template as any).items.length > 0;
 
   if (hasCircuits) return <ConditioningCircuitsWorkout template={template} sessionId={sessionId} />;
   if (hasTimedItems) return <TimedSetsWorkout template={template} sessionId={sessionId} />;
+  if (hasWaves) return <ProgressiveSuperSetsWorkout template={template} sessionId={sessionId} />;
 
   // Default fallback
   return <FibonacciWorkout template={template} sessionId={sessionId} />;

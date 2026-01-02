@@ -2,13 +2,12 @@
 //
 // FULL-FILE REPLACEMENT ONLY
 //
-// Fibonacci templates expected:
-// template.exercises[] -> { id, name, sets: [{ kind:"reps", value:number, restSeconds?:number }] }
+// Supports rageFibonacci.ts shape:
+// template.exercises[] = { id, name, target_reps: number[] }
 //
-// ✅ Adds "Last: XX lbs" (no prefill)
-// ✅ DB-safe inserts:
-//    - target_kind always "reps" (avoids your CHECK constraint)
-//    - rest_seconds always a number (avoids NOT NULL constraint)
+// ✅ One weight input per exercise
+// ✅ Shows "Last: XX lbs" note (no prefill)
+// ✅ DB-safe: target_kind "reps" + rest_seconds always number
 // ✅ Finish routes to /summary/[sessionId]
 // ✅ Supports resume via sessionId prop
 
@@ -19,16 +18,10 @@ import { supabase } from "../../../src/lib/supabase";
 
 type Props = { template: any; sessionId?: string };
 
-type SetDef = {
-  kind: "reps" | "seconds";
-  value: number;
-  restSeconds?: number;
-};
-
 type ExerciseDef = {
   id: string;
   name: string;
-  sets: SetDef[];
+  target_reps: number[];
 };
 
 function safeArray<T>(v: any): T[] {
@@ -43,6 +36,7 @@ function clampInt(v: any, fallback: number) {
 
 export default function FibonacciWorkout({ template, sessionId: sessionIdOverride }: Props) {
   const title = String(template?.title ?? "Fibonacci Pyramids");
+  const DEFAULT_REST_SECONDS = 60;
 
   const exercises: ExerciseDef[] = useMemo(() => {
     const raw = safeArray<any>(template?.exercises);
@@ -50,25 +44,12 @@ export default function FibonacciWorkout({ template, sessionId: sessionIdOverrid
       .map((e: any, idx: number) => {
         const id = String(e?.id ?? `${template?.id ?? "fib"}-ex-${idx + 1}`);
         const name = String(e?.name ?? "").trim();
-        const setsRaw = safeArray<any>(e?.sets);
+        const reps = safeArray<any>(e?.target_reps)
+          .map((n) => clampInt(n, 0))
+          .filter((n) => n > 0);
 
-        const sets: SetDef[] = setsRaw
-          .map((s: any) => {
-            if (!s) return null;
-            if (typeof s === "number") return { kind: "reps", value: s } as SetDef;
-            if (typeof s?.value === "number") {
-              return {
-                kind: (s.kind === "seconds" ? "seconds" : "reps") as any,
-                value: clampInt(s.value, 0),
-                restSeconds: typeof s.restSeconds === "number" ? s.restSeconds : undefined,
-              } as SetDef;
-            }
-            return null;
-          })
-          .filter((x) => x && x.value > 0) as SetDef[];
-
-        if (!name || !sets.length) return null;
-        return { id, name, sets } as ExerciseDef;
+        if (!name || reps.length === 0) return null;
+        return { id, name, target_reps: reps } as ExerciseDef;
       })
       .filter(Boolean) as ExerciseDef[];
   }, [template]);
@@ -212,8 +193,8 @@ export default function FibonacciWorkout({ template, sessionId: sessionIdOverrid
         const wNum = wRaw === "" ? null : Number(wRaw);
         const weight = Number.isFinite(wNum as any) ? (wNum as number) : null;
 
-        for (let i = 0; i < ex.sets.length; i++) {
-          const s = ex.sets[i];
+        for (let i = 0; i < ex.target_reps.length; i++) {
+          const reps = ex.target_reps[i];
           const completed = !!done[keyFor(ex.id, i)];
 
           rows.push({
@@ -224,15 +205,12 @@ export default function FibonacciWorkout({ template, sessionId: sessionIdOverrid
             exercise_name: ex.name,
             set_index: setIndex++,
 
-            // ✅ DB-safe (your constraint rejects "seconds"/"time" etc)
             target_kind: "reps",
-            target_value: s.value,
-
-            // ✅ NOT NULL
-            rest_seconds: typeof s.restSeconds === "number" ? s.restSeconds : 0,
+            target_value: reps,
+            rest_seconds: DEFAULT_REST_SECONDS,
 
             weight,
-            reps_done: completed ? s.value : null,
+            reps_done: completed ? reps : null,
             completed,
           });
         }
@@ -267,7 +245,7 @@ export default function FibonacciWorkout({ template, sessionId: sessionIdOverrid
     return (
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
         <Text style={{ color: "white", fontSize: 22, fontWeight: "900" }}>{title}</Text>
-        <Text style={{ color: "#94a3b8" }}>No exercises found (expected template.exercises[].sets[])</Text>
+        <Text style={{ color: "#94a3b8" }}>No exercises found (expected template.exercises[].target_reps[])</Text>
 
         <Pressable
           onPress={() => router.back()}
@@ -335,7 +313,7 @@ export default function FibonacciWorkout({ template, sessionId: sessionIdOverrid
             </View>
 
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              {ex.sets.map((s, i) => {
+              {ex.target_reps.map((reps, i) => {
                 const k = keyFor(ex.id, i);
                 const isDone = !!done[k];
                 return (
@@ -352,7 +330,7 @@ export default function FibonacciWorkout({ template, sessionId: sessionIdOverrid
                     }}
                   >
                     <Text style={{ color: "white", fontWeight: "900" }}>
-                      {s.value} reps {isDone ? "✓" : ""}
+                      {reps} reps {isDone ? "✓" : ""}
                     </Text>
                   </Pressable>
                 );

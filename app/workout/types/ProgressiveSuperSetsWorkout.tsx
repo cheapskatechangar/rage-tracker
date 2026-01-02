@@ -2,10 +2,16 @@
 //
 // FULL-FILE REPLACEMENT ONLY
 //
-// Fixes:
-// ✅ "No exercises found" via multi-shape normalize()
-// ✅ DB-safe inserts (target_kind always "reps", rest_seconds never null)
-// ✅ Last lbs note per exercise (no prefill)
+// Supports rageProgressiveSuperSets.ts shape:
+// template.workout_type === "progressive_super_sets"
+// template.day_plan.waves[].rounds[].exercises[] = { name, target_reps:number[] }
+//
+// ✅ No more "No exercises found"
+// ✅ One weight input per exercise (applies to all sets / rounds)
+// ✅ Shows "Last: XX lbs" note (no prefill)
+// ✅ DB-safe inserts:
+//    - target_kind always "reps" (avoids CHECK constraint)
+//    - rest_seconds never null
 // ✅ Finish routes to /summary/[sessionId]
 // ✅ Supports resume via sessionId prop
 
@@ -16,11 +22,13 @@ import { supabase } from "../../../src/lib/supabase";
 
 type Props = { template: any; sessionId?: string };
 
-type SetDef = { kind: "reps" | "seconds"; value: number; restSeconds?: number };
-type ExerciseSetList = { mode: "sets"; exercises: { id: string; name: string; sets: SetDef[] }[] };
-type RoundMode = {
-  mode: "rounds";
-  rounds: { label: string; exercises: { id: string; name: string; target_reps: number[] }[] }[];
+type NormalizedRound = {
+  label: string;
+  exercises: {
+    id: string;
+    name: string;
+    target_reps: number[];
+  }[];
 };
 
 function safeArray<T>(v: any): T[] {
@@ -33,112 +41,119 @@ function clampInt(v: any, fallback: number) {
   return n;
 }
 
-function normalize(template: any): ExerciseSetList | RoundMode | null {
-  // A) template.exercises[].sets[]
-  const ex = safeArray<any>(template?.exercises);
-  if (ex.length) {
-    const normalized = ex
-      .map((e: any, idx: number) => {
-        const id = String(e?.id ?? `${template?.id ?? "pss"}-ex-${idx + 1}`);
-        const name = String(e?.name ?? "").trim();
-        const setsRaw = safeArray<any>(e?.sets);
+function slug(s: string) {
+  return String(s || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
 
-        const sets: SetDef[] = setsRaw
-          .map((s: any) => {
-            if (typeof s === "number") return { kind: "reps", value: s } as SetDef;
-            if (s && typeof s.value === "number") {
-              return {
-                kind: (s.kind === "seconds" ? "seconds" : "reps") as any,
-                value: clampInt(s.value, 0),
-                restSeconds: typeof s.restSeconds === "number" ? s.restSeconds : undefined,
-              } as SetDef;
-            }
-            return null;
-          })
-          .filter((x) => x && x.value > 0) as SetDef[];
+function normalize(template: any): NormalizedRound[] {
+  const rounds: NormalizedRound[] = [];
 
-        if (!name || !sets.length) return null;
-        return { id, name, sets };
-      })
-      .filter(Boolean) as any[];
-
-    if (normalized.length) return { mode: "sets", exercises: normalized };
-  }
-
-  // B) template.day_plan.waves[].rounds[]
+  // Primary shape: day_plan.waves[].rounds[].exercises[].target_reps[]
   const waves = safeArray<any>(template?.day_plan?.waves);
   if (waves.length) {
-    const rounds: any[] = [];
-
     for (let w = 0; w < waves.length; w++) {
       const wave = waves[w];
+      const waveLabel = String(wave?.label ?? `Wave ${w + 1}`);
       const rs = safeArray<any>(wave?.rounds);
 
       for (let r = 0; r < rs.length; r++) {
         const round = rs[r];
+        const roundLabel = String(round?.label ?? `${waveLabel} • Round ${r + 1}`);
+
         const exs = safeArray<any>(round?.exercises)
           .map((e: any, idx: number) => {
             const name = String(e?.name ?? "").trim();
-            const reps = safeArray<any>(e?.target_reps).map((n) => clampInt(n, 0)).filter((n) => n > 0);
+            const reps = safeArray<any>(e?.target_reps)
+              .map((n) => clampInt(n, 0))
+              .filter((n) => n > 0);
 
-            if (!name || !reps.length) return null;
+            if (!name || reps.length === 0) return null;
 
-            return {
-              id: String(e?.id ?? `${template?.id ?? "pss"}-w${w + 1}-r${r + 1}-e${idx + 1}`),
-              name,
-              target_reps: reps,
-            };
+            // Stable exercise_id:
+            // - prefer provided e.id
+            // - otherwise create from template + name
+            const id = String(e?.id ?? `${template?.id ?? "pss"}:${slug(name)}`);
+
+            return { id, name, target_reps: reps };
           })
-          .filter(Boolean);
+          .filter(Boolean) as any[];
 
-        if (exs.length) {
-          rounds.push({
-            label: String(round?.label ?? `Wave ${w + 1} • Round ${r + 1}`),
-            exercises: exs,
-          });
-        }
+        if (exs.length) rounds.push({ label: roundLabel, exercises: exs });
       }
     }
 
-    if (rounds.length) return { mode: "rounds", rounds };
+    if (rounds.length) return rounds;
   }
 
-  // C) template.day_plan.exercises[] fallback
+  // Fallback shape A: template.exercises[].target_reps[]
+  const ex = safeArray<any>(template?.exercises);
+  if (ex.length) {
+    rounds.push({
+      label: "Workout",
+      exercises: ex
+        .map((e: any, idx: number) => {
+          const name = String(e?.name ?? "").trim();
+          const reps = safeArray<any>(e?.target_reps)
+            .map((n) => clampInt(n, 0))
+            .filter((n) => n > 0);
+          if (!name || reps.length === 0) return null;
+          const id = String(e?.id ?? `${template?.id ?? "pss"}:${slug(name)}:${idx + 1}`);
+          return { id, name, target_reps: reps };
+        })
+        .filter(Boolean),
+    });
+
+    return rounds;
+  }
+
+  // Fallback shape B: template.day_plan.exercises[].target_reps[]
   const dpEx = safeArray<any>(template?.day_plan?.exercises);
   if (dpEx.length) {
-    const normalized = dpEx
-      .map((e: any, idx: number) => {
-        const name = String(e?.name ?? "").trim();
-        const reps = safeArray<any>(e?.target_reps).map((n) => clampInt(n, 0)).filter((n) => n > 0);
-        if (!name || !reps.length) return null;
+    rounds.push({
+      label: "Workout",
+      exercises: dpEx
+        .map((e: any, idx: number) => {
+          const name = String(e?.name ?? "").trim();
+          const reps = safeArray<any>(e?.target_reps)
+            .map((n) => clampInt(n, 0))
+            .filter((n) => n > 0);
+          if (!name || reps.length === 0) return null;
+          const id = String(e?.id ?? `${template?.id ?? "pss"}:${slug(name)}:${idx + 1}`);
+          return { id, name, target_reps: reps };
+        })
+        .filter(Boolean),
+    });
 
-        return {
-          id: String(e?.id ?? `${template?.id ?? "pss"}-dp-e${idx + 1}`),
-          name,
-          sets: reps.map((v) => ({ kind: "reps", value: v } as SetDef)),
-        };
-      })
-      .filter(Boolean) as any[];
-
-    if (normalized.length) return { mode: "sets", exercises: normalized };
+    return rounds;
   }
 
-  return null;
+  return [];
 }
 
 export default function ProgressiveSuperSetsWorkout({ template, sessionId: sessionIdOverride }: Props) {
+  const title = String(template?.title ?? "Progressive Super Sets");
+
+  const rounds = useMemo(() => normalize(template), [template]);
+
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const normalized = useMemo(() => normalize(template), [template]);
-
   // one weight input per exercise id
   const [weights, setWeights] = useState<Record<string, string>>({});
+
+  // done state per (exercise, round, setIndex)
   const [done, setDone] = useState<Record<string, boolean>>({});
 
   // Last lbs note (no prefill)
   const [lastLbs, setLastLbs] = useState<Record<string, number>>({});
 
+  const setKey = (exId: string, roundIndex: number, setIndex: number) => `${exId}::${roundIndex}::${setIndex}`;
+
+  // Start or resume session
   useEffect(() => {
     let cancelled = false;
 
@@ -236,42 +251,47 @@ export default function ProgressiveSuperSetsWorkout({ template, sessionId: sessi
     };
   }, [template?.id]);
 
+  const toggle = (exId: string, rIdx: number, sIdx: number) => {
+    const k = setKey(exId, rIdx, sIdx);
+    setDone((p) => ({ ...p, [k]: !p[k] }));
+  };
+
   const finish = async () => {
     if (!sessionId) {
       Alert.alert("Hold up", "Session not ready yet. Try again in a second.");
       return;
     }
 
-    setSaving(true);
-
     const { data: auth } = await supabase.auth.getUser();
     const userId = auth?.user?.id;
 
     if (!userId) {
-      setSaving(false);
-      Alert.alert("Not signed in");
+      Alert.alert("Not signed in", "Please sign in to save your workout.");
       return;
     }
+
+    if (!rounds.length) {
+      Alert.alert("No exercises found", "Template didn't contain waves/rounds/exercises target reps.");
+      return;
+    }
+
+    setSaving(true);
 
     try {
       const rows: any[] = [];
       let globalSetIndex = 0;
 
-      if (!normalized) {
-        Alert.alert("No exercises found", "This template didn’t normalize correctly.");
-        return;
-      }
+      for (let rIdx = 0; rIdx < rounds.length; rIdx++) {
+        const round = rounds[rIdx];
 
-      if (normalized.mode === "sets") {
-        for (const ex of normalized.exercises) {
+        for (const ex of round.exercises) {
           const wRaw = (weights[ex.id] ?? "").trim();
           const wNum = wRaw === "" ? null : Number(wRaw);
           const weight = Number.isFinite(wNum as any) ? (wNum as number) : null;
 
-          for (let i = 0; i < ex.sets.length; i++) {
-            const s = ex.sets[i];
-            const k = `${ex.id}::${i}`;
-            const isDone = !!done[k];
+          for (let sIdx = 0; sIdx < ex.target_reps.length; sIdx++) {
+            const reps = ex.target_reps[sIdx];
+            const isDone = !!done[setKey(ex.id, rIdx, sIdx)];
 
             rows.push({
               session_id: sessionId,
@@ -283,49 +303,15 @@ export default function ProgressiveSuperSetsWorkout({ template, sessionId: sessi
 
               // ✅ DB-safe
               target_kind: "reps",
-              target_value: s.value,
-              rest_seconds: typeof s.restSeconds === "number" ? s.restSeconds : 0,
+              target_value: reps,
+
+              // ✅ NOT NULL
+              rest_seconds: 0,
 
               weight,
-              reps_done: isDone ? s.value : null,
+              reps_done: isDone ? reps : null,
               completed: isDone,
             });
-          }
-        }
-      } else {
-        // rounds mode
-        for (let r = 0; r < normalized.rounds.length; r++) {
-          const round = normalized.rounds[r];
-
-          for (const ex of round.exercises) {
-            // weight input per exercise id
-            const wRaw = (weights[ex.id] ?? "").trim();
-            const wNum = wRaw === "" ? null : Number(wRaw);
-            const weight = Number.isFinite(wNum as any) ? (wNum as number) : null;
-
-            for (let i = 0; i < ex.target_reps.length; i++) {
-              const reps = ex.target_reps[i];
-              const k = `${ex.id}::${r}::${i}`;
-              const isDone = !!done[k];
-
-              rows.push({
-                session_id: sessionId,
-                user_id: userId,
-                template_id: template.id,
-                exercise_id: ex.id,
-                exercise_name: ex.name,
-                set_index: globalSetIndex++,
-
-                // ✅ DB-safe
-                target_kind: "reps",
-                target_value: reps,
-                rest_seconds: 0,
-
-                weight,
-                reps_done: isDone ? reps : null,
-                completed: isDone,
-              });
-            }
           }
         }
       }
@@ -355,13 +341,13 @@ export default function ProgressiveSuperSetsWorkout({ template, sessionId: sessi
     }
   };
 
-  if (!normalized) {
+  if (!rounds.length) {
     return (
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
-        <Text style={{ color: "white", fontSize: 22, fontWeight: "900" }}>
-          {String(template?.title ?? "Progressive Super Sets")}
+        <Text style={{ color: "white", fontSize: 22, fontWeight: "900" }}>{title}</Text>
+        <Text style={{ color: "#94a3b8" }}>
+          No exercises found (expected template.day_plan.waves[].rounds[].exercises[].target_reps[])
         </Text>
-        <Text style={{ color: "#94a3b8" }}>No exercises found (template shape mismatch).</Text>
 
         <Pressable
           onPress={() => router.back()}
@@ -381,165 +367,88 @@ export default function ProgressiveSuperSetsWorkout({ template, sessionId: sessi
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
-      <Text style={{ color: "white", fontSize: 22, fontWeight: "900" }}>
-        {String(template?.title ?? "Progressive Super Sets")}
-      </Text>
+      <Text style={{ color: "white", fontSize: 22, fontWeight: "900" }}>{title}</Text>
 
-      {normalized.mode === "sets" ? (
-        normalized.exercises.map((ex) => {
-          const last = lastLbs[ex.id];
+      {rounds.map((round, rIdx) => (
+        <View
+          key={`round-${rIdx}-${round.label}`}
+          style={{
+            borderWidth: 1,
+            borderColor: "#334155",
+            backgroundColor: "#0b1220",
+            padding: 14,
+            borderRadius: 18,
+            gap: 10,
+          }}
+        >
+          <Text style={{ color: "white", fontSize: 16, fontWeight: "900" }}>{round.label}</Text>
 
-          return (
-            <View
-              key={ex.id}
-              style={{
-                borderWidth: 1,
-                borderColor: "#334155",
-                backgroundColor: "#0b1220",
-                padding: 14,
-                borderRadius: 18,
-                gap: 10,
-              }}
-            >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: "white", fontSize: 16, fontWeight: "900" }}>{ex.name}</Text>
-                  {typeof last === "number" ? (
-                    <Text style={{ color: "#94a3b8", fontSize: 12 }}>Last: {last} lbs</Text>
-                  ) : (
-                    <Text style={{ color: "#0b1220", fontSize: 12 }}>.</Text>
-                  )}
-                </View>
+          {round.exercises.map((ex) => {
+            const last = lastLbs[ex.id];
 
-                <View style={{ width: 110 }}>
-                  <TextInput
-                    value={weights[ex.id] ?? ""}
-                    onChangeText={(v) => setWeights((p) => ({ ...p, [ex.id]: v }))}
-                    keyboardType="number-pad"
-                    placeholder="lbs"
-                    placeholderTextColor="#64748b"
-                    style={{
-                      borderWidth: 1,
-                      borderColor: "#334155",
-                      borderRadius: 12,
-                      paddingHorizontal: 10,
-                      paddingVertical: 8,
-                      color: "white",
-                      backgroundColor: "#071024",
-                      textAlign: "center",
-                    }}
-                  />
-                </View>
-              </View>
+            return (
+              <View key={ex.id} style={{ gap: 8, marginTop: 8 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: "white", fontWeight: "900" }}>{ex.name}</Text>
+                    {typeof last === "number" ? (
+                      <Text style={{ color: "#94a3b8", fontSize: 12 }}>Last: {last} lbs</Text>
+                    ) : (
+                      <Text style={{ color: "#0b1220", fontSize: 12 }}>.</Text>
+                    )}
+                  </View>
 
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                {ex.sets.map((s, i) => {
-                  const k = `${ex.id}::${i}`;
-                  const isDone = !!done[k];
-                  return (
-                    <Pressable
-                      key={k}
-                      onPress={() => setDone((p) => ({ ...p, [k]: !p[k] }))}
+                  <View style={{ width: 110 }}>
+                    <TextInput
+                      value={weights[ex.id] ?? ""}
+                      onChangeText={(v) => setWeights((p) => ({ ...p, [ex.id]: v }))}
+                      keyboardType="number-pad"
+                      placeholder="lbs"
+                      placeholderTextColor="#64748b"
                       style={{
-                        paddingVertical: 8,
-                        paddingHorizontal: 10,
-                        borderRadius: 12,
                         borderWidth: 1,
-                        borderColor: isDone ? "#22c55e" : "#334155",
-                        backgroundColor: isDone ? "rgba(34,197,94,0.10)" : "transparent",
+                        borderColor: "#334155",
+                        borderRadius: 12,
+                        paddingHorizontal: 10,
+                        paddingVertical: 8,
+                        color: "white",
+                        backgroundColor: "#071024",
+                        textAlign: "center",
                       }}
-                    >
-                      <Text style={{ color: "white", fontWeight: "900" }}>
-                        {s.value} reps {isDone ? "✓" : ""}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-          );
-        })
-      ) : (
-        normalized.rounds.map((round, rIdx) => (
-          <View
-            key={`${round.label}-${rIdx}`}
-            style={{
-              borderWidth: 1,
-              borderColor: "#334155",
-              backgroundColor: "#0b1220",
-              padding: 14,
-              borderRadius: 18,
-              gap: 10,
-            }}
-          >
-            <Text style={{ color: "white", fontSize: 16, fontWeight: "900" }}>{round.label}</Text>
-
-            {round.exercises.map((ex) => {
-              const last = lastLbs[ex.id];
-
-              return (
-                <View key={ex.id} style={{ gap: 8, marginTop: 8 }}>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: "white", fontWeight: "900" }}>{ex.name}</Text>
-                      {typeof last === "number" ? (
-                        <Text style={{ color: "#94a3b8", fontSize: 12 }}>Last: {last} lbs</Text>
-                      ) : (
-                        <Text style={{ color: "#0b1220", fontSize: 12 }}>.</Text>
-                      )}
-                    </View>
-
-                    <View style={{ width: 110 }}>
-                      <TextInput
-                        value={weights[ex.id] ?? ""}
-                        onChangeText={(v) => setWeights((p) => ({ ...p, [ex.id]: v }))}
-                        keyboardType="number-pad"
-                        placeholder="lbs"
-                        placeholderTextColor="#64748b"
-                        style={{
-                          borderWidth: 1,
-                          borderColor: "#334155",
-                          borderRadius: 12,
-                          paddingHorizontal: 10,
-                          paddingVertical: 8,
-                          color: "white",
-                          backgroundColor: "#071024",
-                          textAlign: "center",
-                        }}
-                      />
-                    </View>
-                  </View>
-
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-                    {ex.target_reps.map((reps, i) => {
-                      const k = `${ex.id}::${rIdx}::${i}`;
-                      const isDone = !!done[k];
-                      return (
-                        <Pressable
-                          key={k}
-                          onPress={() => setDone((p) => ({ ...p, [k]: !p[k] }))}
-                          style={{
-                            paddingVertical: 8,
-                            paddingHorizontal: 10,
-                            borderRadius: 12,
-                            borderWidth: 1,
-                            borderColor: isDone ? "#22c55e" : "#334155",
-                            backgroundColor: isDone ? "rgba(34,197,94,0.10)" : "transparent",
-                          }}
-                        >
-                          <Text style={{ color: "white", fontWeight: "900" }}>
-                            {reps} reps {isDone ? "✓" : ""}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
+                    />
                   </View>
                 </View>
-              );
-            })}
-          </View>
-        ))
-      )}
+
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                  {ex.target_reps.map((reps, sIdx) => {
+                    const k = setKey(ex.id, rIdx, sIdx);
+                    const isDone = !!done[k];
+
+                    return (
+                      <Pressable
+                        key={k}
+                        onPress={() => toggle(ex.id, rIdx, sIdx)}
+                        style={{
+                          paddingVertical: 8,
+                          paddingHorizontal: 10,
+                          borderRadius: 12,
+                          borderWidth: 1,
+                          borderColor: isDone ? "#22c55e" : "#334155",
+                          backgroundColor: isDone ? "rgba(34,197,94,0.10)" : "transparent",
+                        }}
+                      >
+                        <Text style={{ color: "white", fontWeight: "900" }}>
+                          {reps} reps {isDone ? "✓" : ""}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      ))}
 
       <View style={{ flexDirection: "row", gap: 10, marginTop: 6 }}>
         <Pressable

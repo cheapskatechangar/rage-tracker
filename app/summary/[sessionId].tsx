@@ -2,16 +2,8 @@
 //
 // FULL-FILE REPLACEMENT ONLY
 //
-// Summary screen ("dopamine receipt"):
-// - Fetch workout_session + set_results
-// - Compute duration, sets completed, volume, reps
-// - Group by exercise_name for a clean breakdown
-// - Actions: Repeat workout, Home, History
-//
-// Notes:
-// - Your DB target_kind constraint is tight, so we don't rely on it too much.
-// - Timed sets store target_value as seconds but still write target_kind "reps" (DB-safe).
-//   We'll infer "seconds" by label if it starts with "RAGE SET —".
+// Summary screen ("dopamine receipt") + auto-open Programs section:
+// - Back to Programs routes to /programs?open=<workout_type>
 
 import { useEffect, useMemo, useState } from "react";
 import { View, Text, ScrollView, Pressable, ActivityIndicator } from "react-native";
@@ -65,6 +57,19 @@ function isTimedByLabel(exerciseName: string) {
   return String(exerciseName || "").startsWith("RAGE SET —");
 }
 
+function inferWorkoutType(template: any, templateId: string): string {
+  const wt = String(template?.workout_type ?? "").trim();
+  if (wt) return wt;
+
+  // fallback on id patterns (keeps behavior stable)
+  if (templateId.includes("fib")) return "fibonacci";
+  if (templateId.includes("pss")) return "progressive_super_sets";
+  if (templateId.includes("ts")) return "timed_sets";
+  if (templateId.includes("cc")) return "conditioning_circuits";
+
+  return "fibonacci";
+}
+
 export default function SummaryScreen() {
   const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
 
@@ -77,6 +82,16 @@ export default function SummaryScreen() {
     const id = String(session?.template_id ?? "");
     return TEMPLATES.find((t: any) => t.id === id);
   }, [session?.template_id]);
+
+  const workoutType = useMemo(() => {
+    const tid = String(session?.template_id ?? "");
+    return inferWorkoutType(template, tid);
+  }, [template, session?.template_id]);
+
+  const programsRoute = useMemo(() => {
+    const open = encodeURIComponent(workoutType || "fibonacci");
+    return `/programs?open=${open}`;
+  }, [workoutType]);
 
   useEffect(() => {
     let cancelled = false;
@@ -140,7 +155,6 @@ export default function SummaryScreen() {
     const total = sets.length;
     const completed = sets.filter((s) => !!s.completed).length;
 
-    // For volume + reps: only count completed sets where we have numeric reps + weight
     let totalReps = 0;
     let totalVolume = 0;
 
@@ -158,7 +172,6 @@ export default function SummaryScreen() {
   }, [sets]);
 
   const grouped = useMemo(() => {
-    // group by exercise_name
     const map = new Map<
       string,
       {
@@ -184,7 +197,7 @@ export default function SummaryScreen() {
 
       g.totalCount += 1;
       if (s.completed) g.completedCount += 1;
-      if (typeof s.weight === "number") g.lastWeight = s.weight; // last one wins (ordered by set_index)
+      if (typeof s.weight === "number") g.lastWeight = s.weight;
 
       g.items.push(s);
       map.set(name, g);
@@ -209,7 +222,7 @@ export default function SummaryScreen() {
         <Text style={{ color: "#fca5a5" }}>{error ?? "Something went wrong."}</Text>
 
         <Pressable
-          onPress={() => router.replace("/")}
+          onPress={() => router.replace(programsRoute)}
           style={{
             paddingVertical: 12,
             borderRadius: 14,
@@ -218,7 +231,7 @@ export default function SummaryScreen() {
             alignItems: "center",
           }}
         >
-          <Text style={{ color: "white", fontWeight: "900" }}>Back Home</Text>
+          <Text style={{ color: "white", fontWeight: "900" }}>Back to Programs</Text>
         </Pressable>
       </View>
     );
@@ -229,7 +242,6 @@ export default function SummaryScreen() {
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
-      {/* Header */}
       <View style={{ gap: 6 }}>
         <Text style={{ color: "white", fontSize: 26, fontWeight: "900" }}>Workout Summary</Text>
         <Text style={{ color: "#cbd5f5", fontSize: 16, fontWeight: "900" }}>{workoutTitle}</Text>
@@ -238,7 +250,6 @@ export default function SummaryScreen() {
         </Text>
       </View>
 
-      {/* Stats cards */}
       <View style={{ flexDirection: "row", gap: 10 }}>
         <View
           style={{
@@ -291,7 +302,6 @@ export default function SummaryScreen() {
         </View>
       </View>
 
-      {/* Breakdown */}
       <Text style={{ color: "white", fontSize: 16, fontWeight: "900", marginTop: 8 }}>Breakdown</Text>
 
       {grouped.map((g) => (
@@ -320,7 +330,6 @@ export default function SummaryScreen() {
             </Text>
           </View>
 
-          {/* Small per-set row chips */}
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             {g.items.map((s) => {
               const label = g.isTimed ? `${s.target_value}s` : `${s.target_value} reps`;
@@ -346,10 +355,9 @@ export default function SummaryScreen() {
         </View>
       ))}
 
-      {/* Actions */}
       <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
         <Pressable
-          onPress={() => router.push(`/workout/${session.template_id}`)}
+          onPress={() => router.replace(programsRoute)}
           style={{
             flex: 1,
             paddingVertical: 14,
@@ -358,9 +366,25 @@ export default function SummaryScreen() {
             alignItems: "center",
           }}
         >
-          <Text style={{ color: "#052e16", fontWeight: "900" }}>Repeat Workout</Text>
+          <Text style={{ color: "#052e16", fontWeight: "900" }}>Back to Programs</Text>
         </Pressable>
 
+        <Pressable
+          onPress={() => router.push(`/workout/${session.template_id}`)}
+          style={{
+            flex: 1,
+            paddingVertical: 14,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: "#334155",
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: "white", fontWeight: "900" }}>Repeat</Text>
+        </Pressable>
+      </View>
+
+      <View style={{ flexDirection: "row", gap: 10 }}>
         <Pressable
           onPress={() => router.replace("/")}
           style={{
@@ -374,20 +398,21 @@ export default function SummaryScreen() {
         >
           <Text style={{ color: "white", fontWeight: "900" }}>Home</Text>
         </Pressable>
-      </View>
 
-      <Pressable
-        onPress={() => router.push("/history")}
-        style={{
-          paddingVertical: 14,
-          borderRadius: 16,
-          borderWidth: 1,
-          borderColor: "#334155",
-          alignItems: "center",
-        }}
-      >
-        <Text style={{ color: "white", fontWeight: "900" }}>View History</Text>
-      </Pressable>
+        <Pressable
+          onPress={() => router.push("/history")}
+          style={{
+            flex: 1,
+            paddingVertical: 14,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: "#334155",
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: "white", fontWeight: "900" }}>History</Text>
+        </Pressable>
+      </View>
     </ScrollView>
   );
 }
