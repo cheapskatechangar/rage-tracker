@@ -1,0 +1,403 @@
+// app/workout/types/FibonacciWorkout.tsx
+//
+// FULL-FILE REPLACEMENT ONLY
+//
+// Fibonacci templates expected:
+// template.exercises[] -> { id, name, sets: [{ kind:"reps", value:number, restSeconds?:number }] }
+//
+// ✅ Adds "Last: XX lbs" (no prefill)
+// ✅ DB-safe inserts:
+//    - target_kind always "reps" (avoids your CHECK constraint)
+//    - rest_seconds always a number (avoids NOT NULL constraint)
+// ✅ Finish routes to /summary/[sessionId]
+// ✅ Supports resume via sessionId prop
+
+import { useEffect, useMemo, useState } from "react";
+import { View, Text, ScrollView, Pressable, TextInput, Alert } from "react-native";
+import { router } from "expo-router";
+import { supabase } from "../../../src/lib/supabase";
+
+type Props = { template: any; sessionId?: string };
+
+type SetDef = {
+  kind: "reps" | "seconds";
+  value: number;
+  restSeconds?: number;
+};
+
+type ExerciseDef = {
+  id: string;
+  name: string;
+  sets: SetDef[];
+};
+
+function safeArray<T>(v: any): T[] {
+  return Array.isArray(v) ? v : [];
+}
+
+function clampInt(v: any, fallback: number) {
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n)) return fallback;
+  return n;
+}
+
+export default function FibonacciWorkout({ template, sessionId: sessionIdOverride }: Props) {
+  const title = String(template?.title ?? "Fibonacci Pyramids");
+
+  const exercises: ExerciseDef[] = useMemo(() => {
+    const raw = safeArray<any>(template?.exercises);
+    return raw
+      .map((e: any, idx: number) => {
+        const id = String(e?.id ?? `${template?.id ?? "fib"}-ex-${idx + 1}`);
+        const name = String(e?.name ?? "").trim();
+        const setsRaw = safeArray<any>(e?.sets);
+
+        const sets: SetDef[] = setsRaw
+          .map((s: any) => {
+            if (!s) return null;
+            if (typeof s === "number") return { kind: "reps", value: s } as SetDef;
+            if (typeof s?.value === "number") {
+              return {
+                kind: (s.kind === "seconds" ? "seconds" : "reps") as any,
+                value: clampInt(s.value, 0),
+                restSeconds: typeof s.restSeconds === "number" ? s.restSeconds : undefined,
+              } as SetDef;
+            }
+            return null;
+          })
+          .filter((x) => x && x.value > 0) as SetDef[];
+
+        if (!name || !sets.length) return null;
+        return { id, name, sets } as ExerciseDef;
+      })
+      .filter(Boolean) as ExerciseDef[];
+  }, [template]);
+
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const [weights, setWeights] = useState<Record<string, string>>({});
+  const [done, setDone] = useState<Record<string, boolean>>({});
+
+  // Last lbs note (no prefill)
+  const [lastLbs, setLastLbs] = useState<Record<string, number>>({});
+
+  const keyFor = (exId: string, setIdx: number) => `${exId}::${setIdx}`;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (sessionIdOverride) {
+      setSessionId(String(sessionIdOverride));
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const start = async () => {
+      const { data: auth } = await supabase.auth.getUser();
+      const userId = auth?.user?.id;
+
+      if (!userId) {
+        Alert.alert("Not signed in", "Please sign in to start a workout.");
+        router.back();
+        return;
+      }
+
+      const { data: row, error } = await supabase
+        .from("workout_sessions")
+        .insert({
+          user_id: userId,
+          template_id: template.id,
+          started_at: new Date().toISOString(),
+          finished_at: null,
+        })
+        .select("id")
+        .single();
+
+      if (cancelled) return;
+
+      if (error || !row?.id) {
+        console.error("Failed to create session", error);
+        Alert.alert("Error", "Could not start workout session.");
+        router.back();
+        return;
+      }
+
+      setSessionId(row.id);
+    };
+
+    start();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [template?.id, sessionIdOverride]);
+
+  // Load last weights from most recent finished session for this template
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadLast = async () => {
+      const { data: auth } = await supabase.auth.getUser();
+      const userId = auth?.user?.id;
+      if (!userId) return;
+
+      const { data: lastSession } = await supabase
+        .from("workout_sessions")
+        .select("id, finished_at")
+        .eq("user_id", userId)
+        .eq("template_id", template.id)
+        .not("finished_at", "is", null)
+        .order("finished_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (cancelled) return;
+      if (!lastSession?.id) return;
+
+      const { data: results } = await supabase
+        .from("set_results")
+        .select("exercise_id, weight, set_index")
+        .eq("session_id", lastSession.id)
+        .order("set_index", { ascending: true });
+
+      if (cancelled) return;
+      if (!results?.length) return;
+
+      const map: Record<string, number> = {};
+      for (const r of results as any[]) {
+        const exId = String(r.exercise_id ?? "");
+        const w = r.weight;
+        if (exId && typeof w === "number" && Number.isFinite(w)) map[exId] = w;
+      }
+      setLastLbs(map);
+    };
+
+    loadLast();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [template?.id]);
+
+  const toggle = (exId: string, setIdx: number) => {
+    const k = keyFor(exId, setIdx);
+    setDone((p) => ({ ...p, [k]: !p[k] }));
+  };
+
+  const finish = async () => {
+    if (!sessionId) {
+      Alert.alert("Hold up", "Session not ready yet. Try again in a second.");
+      return;
+    }
+
+    setSaving(true);
+
+    const { data: auth } = await supabase.auth.getUser();
+    const userId = auth?.user?.id;
+
+    if (!userId) {
+      setSaving(false);
+      Alert.alert("Not signed in");
+      return;
+    }
+
+    try {
+      const rows: any[] = [];
+      let setIndex = 0;
+
+      for (const ex of exercises) {
+        const wRaw = (weights[ex.id] ?? "").trim();
+        const wNum = wRaw === "" ? null : Number(wRaw);
+        const weight = Number.isFinite(wNum as any) ? (wNum as number) : null;
+
+        for (let i = 0; i < ex.sets.length; i++) {
+          const s = ex.sets[i];
+          const completed = !!done[keyFor(ex.id, i)];
+
+          rows.push({
+            session_id: sessionId,
+            user_id: userId,
+            template_id: template.id,
+            exercise_id: ex.id,
+            exercise_name: ex.name,
+            set_index: setIndex++,
+
+            // ✅ DB-safe (your constraint rejects "seconds"/"time" etc)
+            target_kind: "reps",
+            target_value: s.value,
+
+            // ✅ NOT NULL
+            rest_seconds: typeof s.restSeconds === "number" ? s.restSeconds : 0,
+
+            weight,
+            reps_done: completed ? s.value : null,
+            completed,
+          });
+        }
+      }
+
+      const { error: insErr } = await supabase.from("set_results").insert(rows);
+      if (insErr) {
+        console.error("Failed inserting set_results", insErr);
+        Alert.alert("Error", insErr.message);
+        return;
+      }
+
+      const { error: finErr } = await supabase
+        .from("workout_sessions")
+        .update({ finished_at: new Date().toISOString() })
+        .eq("id", sessionId);
+
+      if (finErr) {
+        console.error("Failed to finish session", finErr);
+        Alert.alert("Error", "Could not finalize session (sets were saved).");
+        router.back();
+        return;
+      }
+
+      router.replace(`/summary/${sessionId}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!exercises.length) {
+    return (
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
+        <Text style={{ color: "white", fontSize: 22, fontWeight: "900" }}>{title}</Text>
+        <Text style={{ color: "#94a3b8" }}>No exercises found (expected template.exercises[].sets[])</Text>
+
+        <Pressable
+          onPress={() => router.back()}
+          style={{
+            paddingVertical: 12,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: "#334155",
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: "white", fontWeight: "900" }}>Back</Text>
+        </Pressable>
+      </ScrollView>
+    );
+  }
+
+  return (
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
+      <Text style={{ color: "white", fontSize: 22, fontWeight: "900" }}>{title}</Text>
+
+      {exercises.map((ex) => {
+        const last = lastLbs[ex.id];
+        return (
+          <View
+            key={ex.id}
+            style={{
+              borderWidth: 1,
+              borderColor: "#334155",
+              backgroundColor: "#0b1220",
+              padding: 14,
+              borderRadius: 18,
+              gap: 10,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: "white", fontSize: 16, fontWeight: "900" }}>{ex.name}</Text>
+                {typeof last === "number" ? (
+                  <Text style={{ color: "#94a3b8", fontSize: 12 }}>Last: {last} lbs</Text>
+                ) : (
+                  <Text style={{ color: "#0b1220", fontSize: 12 }}>.</Text>
+                )}
+              </View>
+
+              <View style={{ width: 110 }}>
+                <TextInput
+                  value={weights[ex.id] ?? ""}
+                  onChangeText={(v) => setWeights((p) => ({ ...p, [ex.id]: v }))}
+                  keyboardType="number-pad"
+                  placeholder="lbs"
+                  placeholderTextColor="#64748b"
+                  style={{
+                    borderWidth: 1,
+                    borderColor: "#334155",
+                    borderRadius: 12,
+                    paddingHorizontal: 10,
+                    paddingVertical: 8,
+                    color: "white",
+                    backgroundColor: "#071024",
+                    textAlign: "center",
+                  }}
+                />
+              </View>
+            </View>
+
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {ex.sets.map((s, i) => {
+                const k = keyFor(ex.id, i);
+                const isDone = !!done[k];
+                return (
+                  <Pressable
+                    key={k}
+                    onPress={() => toggle(ex.id, i)}
+                    style={{
+                      paddingVertical: 8,
+                      paddingHorizontal: 10,
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: isDone ? "#22c55e" : "#334155",
+                      backgroundColor: isDone ? "rgba(34,197,94,0.10)" : "transparent",
+                    }}
+                  >
+                    <Text style={{ color: "white", fontWeight: "900" }}>
+                      {s.value} reps {isDone ? "✓" : ""}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        );
+      })}
+
+      <View style={{ flexDirection: "row", gap: 10, marginTop: 6 }}>
+        <Pressable
+          onPress={() =>
+            Alert.alert("Exit workout?", "Sets won’t be saved unless you finish.", [
+              { text: "Cancel", style: "cancel" },
+              { text: "Exit", style: "destructive", onPress: () => router.back() },
+            ])
+          }
+          style={{
+            flex: 1,
+            paddingVertical: 14,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: "#334155",
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: "white", fontWeight: "900" }}>Exit</Text>
+        </Pressable>
+
+        <Pressable
+          disabled={saving}
+          onPress={finish}
+          style={{
+            flex: 1,
+            paddingVertical: 14,
+            borderRadius: 16,
+            backgroundColor: saving ? "#1f2a44" : "#22c55e",
+            alignItems: "center",
+          }}
+        >
+          <Text style={{ color: saving ? "#cbd5e1" : "#052e16", fontWeight: "900" }}>
+            {saving ? "Saving…" : "Finish → Summary"}
+          </Text>
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+}
