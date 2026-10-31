@@ -27,6 +27,7 @@ const ts = (id: string, title: string, items: TimedSetsItem[]): TimedSetsTemplat
   id,
   title,
   type: "timed_sets",
+  workout_type: "timed_sets",
   items,
   exercises: [],
 });

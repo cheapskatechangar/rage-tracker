@@ -104,7 +104,7 @@ function normalize(template: any): NormalizedRound[] {
           const id = String(e?.id ?? `${template?.id ?? "pss"}:${slug(name)}:${idx + 1}`);
           return { id, name, target_reps: reps };
         })
-        .filter(Boolean),
+        .filter((value): value is { id: string; name: string; target_reps: number[] } => value !== null),
     });
 
     return rounds;
@@ -125,7 +125,7 @@ function normalize(template: any): NormalizedRound[] {
           const id = String(e?.id ?? `${template?.id ?? "pss"}:${slug(name)}:${idx + 1}`);
           return { id, name, target_reps: reps };
         })
-        .filter(Boolean),
+        .filter((value): value is { id: string; name: string; target_reps: number[] } => value !== null),
     });
 
     return rounds;
