@@ -8,6 +8,7 @@
 // ✅ supports resume via sessionId prop
 
 import { useEffect, useMemo, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { View, Text, ScrollView, Pressable, TextInput, Alert } from "react-native";
 import { router } from "expo-router";
 import { supabase } from "../../../src/lib/supabase";
@@ -79,6 +80,9 @@ function buildCardsFromItems(template: any): Card[] {
 export default function TimedSetsWorkout({ template, sessionId: sessionIdOverride }: Props & { sessionId?: string }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftKey, setDraftKey] = useState<string | null>(null);
+  const [draftWarning, setDraftWarning] = useState(false);
 
   const [cardWeight, setCardWeight] = useState<Record<number, string>>({});
   const [done, setDone] = useState<Record<string, boolean>>({}); // key: cardIdx::setIdx
@@ -145,6 +149,51 @@ export default function TimedSetsWorkout({ template, sessionId: sessionIdOverrid
     };
   }, [template?.id, sessionIdOverride]);
 
+  // On-device recovery is scoped to the signed-in user and session.
+  // It is not server-side per-set persistence.
+  useEffect(() => {
+    let cancelled = false;
+    setDraftReady(false);
+    setDraftKey(null);
+    setDone({});
+    setCardWeight({});
+    if (!sessionId) return () => { cancelled = true; };
+    const restore = async () => {
+      const { data: auth } = await supabase.auth.getUser();
+      const userId = auth?.user?.id;
+      if (!userId || cancelled) return;
+      const key = `rage-timed-draft:v1:${userId}:${sessionId}`;
+      try {
+        const raw = await AsyncStorage.getItem(key);
+        if (cancelled) return;
+        if (raw) {
+          const saved = JSON.parse(raw);
+          if (saved?.templateId === template.id && saved?.sessionId === sessionId) {
+            setDone(saved.done && typeof saved.done === "object" ? saved.done : {});
+            setCardWeight(saved.cardWeight && typeof saved.cardWeight === "object" ? saved.cardWeight : {});
+          }
+        }
+      } catch (error) {
+        console.warn("Unable to restore timed workout draft", error);
+        if (!cancelled) setDraftWarning(true);
+      } finally {
+        if (!cancelled) { setDraftKey(key); setDraftReady(true); }
+      }
+    };
+    restore();
+    return () => { cancelled = true; };
+  }, [sessionId, template.id]);
+
+  useEffect(() => {
+    if (!draftReady || !draftKey) return;
+    AsyncStorage.setItem(draftKey, JSON.stringify({
+      templateId: template.id, sessionId, done, cardWeight,
+    })).catch((error) => {
+      console.warn("Unable to save timed workout draft", error);
+      setDraftWarning(true);
+    });
+  }, [draftReady, draftKey, done, cardWeight, sessionId, template.id]);
+
   // 👇 NEW: Load last weights for this template (most recent finished session)
   useEffect(() => {
     let cancelled = false;
@@ -203,8 +252,8 @@ export default function TimedSetsWorkout({ template, sessionId: sessionIdOverrid
   };
 
   const finish = async () => {
-    if (!sessionId) {
-      Alert.alert("Hold up", "Session not ready yet. Try again in a second.");
+    if (!sessionId || !draftReady) {
+      Alert.alert("Hold up", "Workout recovery is still loading. Try again in a second.");
       return;
     }
 
@@ -274,6 +323,10 @@ export default function TimedSetsWorkout({ template, sessionId: sessionIdOverrid
         return;
       }
 
+      if (draftKey) {
+        try { await AsyncStorage.removeItem(draftKey); }
+        catch (error) { console.warn("Could not clear workout draft", error); }
+      }
       router.replace(`/summary/${sessionId}`);
     } finally {
       setSaving(false);
@@ -306,6 +359,8 @@ export default function TimedSetsWorkout({ template, sessionId: sessionIdOverrid
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 12 }}>
       <View style={{ gap: 6 }}>
         <Text style={{ color: "white", fontSize: 22, fontWeight: "900" }}>{title}</Text>
+        {!draftReady && <Text style={{ color: "#fbbf24" }}>Restoring workout draft…</Text>}
+        {draftWarning && <Text style={{ color: "#fbbf24" }}>Local recovery unavailable. Finish your workout to save.</Text>}
         <Text style={{ color: "#64748b", fontSize: 12 }}>
           Progress: {completedSets}/{totalSets} sets completed
         </Text>
@@ -395,7 +450,7 @@ export default function TimedSetsWorkout({ template, sessionId: sessionIdOverrid
       <View style={{ flexDirection: "row", gap: 10, marginTop: 6 }}>
         <Pressable
           onPress={() =>
-            Alert.alert("Exit workout?", "Sets won’t be saved unless you finish.", [
+            Alert.alert("Exit workout?", "A local draft will remain on this device. Resume the same session to restore it.", [
               { text: "Cancel", style: "cancel" },
               { text: "Exit", style: "destructive", onPress: () => router.back() },
             ])
@@ -413,7 +468,7 @@ export default function TimedSetsWorkout({ template, sessionId: sessionIdOverrid
         </Pressable>
 
         <Pressable
-          disabled={saving}
+          disabled={saving || !draftReady}
           onPress={finish}
           style={{
             flex: 1,
