@@ -60,14 +60,29 @@ export default function History() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     const load = async () => {
       setLoading(true);
+      const { data: auth, error: authError } = await supabase.auth.getUser();
+      if (cancelled) return;
+      const userId = auth?.user?.id;
+
+      // Never request workout history without a verified signed-in user.
+      if (authError || !userId) {
+        setRows([]);
+        setLoading(false);
+        router.replace("/sign-in");
+        return;
+      }
+
       const { data, error } = await supabase
         .from("workout_sessions")
         .select("id,template_id,started_at,finished_at")
+        .eq("user_id", userId)
         .order("started_at", { ascending: false })
         .limit(50);
 
+      if (cancelled) return;
       if (error) {
         console.error("History load error", error);
         setRows([]);
@@ -78,6 +93,10 @@ export default function History() {
     };
 
     load();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
