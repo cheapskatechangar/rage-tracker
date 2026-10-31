@@ -88,17 +88,27 @@ export default function HistorySessionDetail() {
 
   useEffect(() => {
     if (!sessionId) return;
+    let cancelled = false;
 
     const load = async () => {
       setLoading(true);
+      const { data: auth, error: authError } = await supabase.auth.getUser();
+      if (cancelled) return;
+      const userId = auth?.user?.id;
+      if (authError || !userId) {
+        setSession(null); setSets([]); setLoading(false);
+        return;
+      }
 
       const { data: sData, error: sErr } = await supabase
         .from("workout_sessions")
         .select("id,template_id,started_at,finished_at")
         .eq("id", sessionId)
-        .single();
+        .eq("user_id", userId)
+        .maybeSingle();
 
-      if (sErr) {
+      if (cancelled) return;
+      if (sErr || !sData) {
         console.error("Session load error", sErr);
         setSession(null);
         setSets([]);
@@ -114,8 +124,10 @@ export default function HistorySessionDetail() {
           "session_id,template_id,exercise_id,exercise_name,set_index,target_kind,target_value,rest_seconds,weight,reps_done,completed"
         )
         .eq("session_id", sessionId)
+        .eq("user_id", userId)
         .order("set_index", { ascending: true });
 
+      if (cancelled) return;
       if (rErr) {
         console.error("Set results load error", rErr);
         setSets([]);
@@ -127,6 +139,7 @@ export default function HistorySessionDetail() {
     };
 
     load();
+    return () => { cancelled = true; };
   }, [sessionId]);
 
   const groups = useMemo(() => {
