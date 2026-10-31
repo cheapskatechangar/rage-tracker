@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101410">
+  <meta name="description" content="Fuel the RAGE: follow the journey of an independent workout tracker coming to iPhone and Android.">
+  <title>Fuel the RAGE | Rage Tracker</title>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:#f5f7f1;background:#0e110e;font-synthesis:none}
+    *{box-sizing:border-box}body{margin:0}a{color:inherit}.wrap{width:min(1100px,calc(100% - 36px));margin:auto}
+    header{border-bottom:1px solid #2a332b}.nav{display:flex;align-items:center;justify-content:space-between;min-height:76px;gap:16px}
+    .logo{font-size:18px;font-weight:900;letter-spacing:.1em}.logo span,.accent{color:#bbfa4b}
+    .tag{font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#bbfa4b}
+    .btn{display:inline-block;border-radius:12px;padding:13px 20px;background:#c6fa58;color:#14210c;font-weight:850;text-decoration:none;border:1px solid #c6fa58;cursor:pointer}
+    .btn.alt{background:transparent;color:#f5f7f1;border-color:#647265}
+    .btn[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
+    .hero{padding:94px 0 76px;background:radial-gradient(ellipse at 80% 15%,#314c1f 0%,transparent 42%)}
+    h1{font-size:clamp(54px,9vw,110px);letter-spacing:-.075em;line-height:.94;margin:16px 0 22px;max-width:900px}
+    h2{font-size:clamp(29px,4vw,47px);letter-spacing:-.045em;margin:0 0 12px}p{line-height:1.6;color:#bac4b8}
+    .hero p{max-width:620px;font-size:19px}.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:30px}
+    .panel{border:1px solid #313d30;border-radius:22px;background:#171d17;padding:26px}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.section{padding:38px 0 62px}
+    .metric{font-size:43px;font-weight:900;color:#c6fa58;letter-spacing:-.04em}.muted{font-size:13px;color:#96a495}
+    .progress{height:12px;border-radius:20px;background:#323b32;overflow:hidden}.progress div{width:0;background:#c6fa58;height:100%}
+    ul{padding-left:20px;color:#c3cec1;line-height:1.9}.steps{counter-reset:step}.step{display:flex;align-items:flex-start;gap:15px;padding:16px 0;border-bottom:1px solid #303a30}
+    .circle{min-width:34px;height:34px;border:1px solid #718b5c;border-radius:50%;display:grid;place-items:center;font-weight:800;color:#c6fa58}
+    .step strong{display:block;margin-bottom:4px}.step p{margin:0}
+    footer{border-top:1px solid #293429;padding:30px 0;color:#9da89d;font-size:13px}
+    @media(max-width:760px){.grid{grid-template-columns:1fr}.hero{padding:62px 0 48px}.nav{min-height:66px}.nav .btn{padding:10px 13px;font-size:12px}}
+  </style>
+</head>
+<body>
+<header><div class="wrap nav"><div class="logo">RAGE <span>TRACKER</span></div><a class="btn alt" href="#roadmap">Road to launch</a></div></header>
+<main>
+  <section class="hero"><div class="wrap">
+    <div class="tag">An independent workout app in development</div>
+    <h1>BUILT IN THE GYM.<br><span class="accent">FUELED BY YOU.</span></h1>
+    <p>Rage Tracker is being built for people who want to lift, log their sets, and see real progress. We're working toward native iPhone and Android releases. Follow the build and help shape what comes next.</p>
+    <div class="actions"><a class="btn" href="#support">Fuel the RAGE</a><a class="btn alt" href="#roadmap">See the plan</a></div>
+  </div></section>
+  <section class="wrap section" aria-labelledby="features"><h2 id="features">More lifting. Less tapping.</h2>
+    <div class="grid">
+      <article class="panel"><div class="tag">01 / Track</div><h3>Workout logging</h3><p>Quick set completion, saved weights, rest tracking, and workout summaries.</p></article>
+      <article class="panel"><div class="tag">02 / Train</div><h3>Four training styles</h3><p>Fibonacci pyramids, progressive supersets, timed sets, and conditioning circuits.</p></article>
+      <article class="panel"><div class="tag">03 / Evolve</div><h3>Smarter coaching</h3><p>AI-guided suggestions are planned after the core workout experience is reliable.</p></article>
+    </div>
+  </section>
+  <section class="wrap section" id="support"><div class="panel">
+    <div class="tag">Community launch fund</div><h2>Help fuel the first release.</h2>
+    <p>We're aiming for <strong style="color:white">$500</strong> in voluntary community support for developer registration, testing, and launch expenses. Contributions are not tax-deductible charitable donations. Support is optional and does not buy app access or guarantee a release date.</p>
+    <div class="metric">$500 <span class="muted">goal</span></div>
+    <p class="muted">Campaign not yet accepting contributions. No money has been collected through this page.</p>
+    <div class="progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="500" aria-label="Fundraising progress"><div></div></div>
+    <div class="actions"><span class="btn" aria-disabled="true" title="Support link coming soon">Contributions opening soon</span><a class="btn alt" href="https://github.com/cheapskatechangar/rage-tracker">View development on GitHub</a></div>
+  </div></section>
+  <section class="wrap section" id="roadmap"><div class="tag">Road to launch</div><h2>Build in public. Ship when ready.</h2>
+    <div class="steps">
+      <div class="step"><div class="circle">1</div><div><strong>Foundation built</strong><p>Existing React Native/Expo codebase and four workout styles. Native readiness still needs validation.</p></div></div>
+      <div class="step"><div class="circle">2</div><div><strong>Mobile quality pass: next</strong><p>Reliable per-set saving, private user data, authentication, accessible controls, and device testing.</p></div></div>
+      <div class="step"><div class="circle">3</div><div><strong>Private app beta: planned</strong><p>Installable Android and iPhone builds for invited testers. No browser version required.</p></div></div>
+      <div class="step"><div class="circle">4</div><div><strong>App stores: planned</strong><p>Submit to Google Play and the Apple App Store after testing and policy review.</p></div></div>
+    </div>
+  </section>
+</main>
+<footer><div class="wrap">Rage Tracker is an independent software project. Not a charity. Workout suggestions are not medical advice. &copy; <span id="year">2026</span> Rage Tracker.</div></footer>
+<script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body></html>
