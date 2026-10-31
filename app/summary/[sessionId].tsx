@@ -107,10 +107,19 @@ export default function SummaryScreen() {
         return;
       }
 
+      const { data: auth, error: authError } = await supabase.auth.getUser();
+      if (cancelled) return;
+      const userId = auth?.user?.id;
+      if (authError || !userId) {
+        setSession(null); setSets([]); setError("Sign in to view this workout."); setLoading(false);
+        return;
+      }
+
       const { data: sRow, error: sErr } = await supabase
         .from("workout_sessions")
         .select("id,user_id,template_id,started_at,finished_at")
         .eq("id", sid)
+        .eq("user_id", userId)
         .maybeSingle();
 
       if (cancelled) return;
@@ -127,6 +136,7 @@ export default function SummaryScreen() {
           "session_id,template_id,exercise_id,exercise_name,set_index,target_kind,target_value,rest_seconds,weight,reps_done,completed"
         )
         .eq("session_id", sid)
+        .eq("user_id", userId)
         .order("set_index", { ascending: true });
 
       if (cancelled) return;
